@@ -1,7 +1,76 @@
+/*
+
+Metzinger y Wehle 20/04/2023
+
+// pines que van al teclado matricial
+DigitalOut keypadRowPins[KEYPAD_NUMBER_OF_ROWS] = {PB_3, PB_5, PC_7, PA_15};
+DigitalIn keypadColPins[KEYPAD_NUMBER_OF_COLS]  = {PB_12, PB_13, PB_15, PC_6};
+
+
+int accumulatedDebounceMatrixKeypadTime = 0;
+int matrixKeypadCodeIndex = 0;
+char matrixKeypadLastKeyPressed = '\0';
+char matrixKeypadIndexToCharArray[] = {
+    '1', '2', '3', 'A',
+    '4', '5', '6', 'B',
+    '7', '8', '9', 'C',
+    '*', '0', '#', 'D',
+};
+matrixKeypadState_t matrixKeypadState;
+
+// corresponde a los estados
+typedef enum {
+    MATRIX_KEYPAD_SCANNING,
+    MATRIX_KEYPAD_DEBOUNCE,
+    MATRIX_KEYPAD_KEY_HOLD_PRESSED
+} matrixKeypadState_t;
+
+
+void matrixKeypadInit(); 
+// se llama en inputsInit()
+
+char matrixKeypadScan(); 
+// se llama en  matrixKeypadUpdate 
+
+char matrixKeypadUpdate(); 
+ se llama en alarmDeactivationUpdate()
+ es decir con cada iteracion del while del main
+ cada vez que se detecta una tecla activa el debounce time
+
+*/
+
+/*
+se iniciliza pidiendole al usuario el la funcion uartTask() en el caso que se presione 's',
+que es llamada en cada iteracion del while del main
+
+
+cuando se desconecta la placa, el tiempo se pierde, por loq ue se debe reinicializar el valor
+una fomra de arreglarlo es conectado una pilita a los pines de alimentacion del rtc
+para alimentar el rtc es por el pin pd_10
+se necesita un porta pila para poder darle entre 1.9V y 3.6V para que el rtc no
+pierda la hora actual al desconectar la alimentacion
+
+ademas se debe cambiar el bridge sb156 para que vbat no este cnectado a vdd,
+por default viene conectado (verificarlo)
+
+la estructura tm, guarda la informaicon de dia mes año minutos y segundos, y maaas...
+las va llenando haciendo
+rtc.variable = valor
+luego las funciones 
+set_time( mktime( &rtcTime ) ); 
+constructor es mktime devuleve un time_t tiempo en segundos correspondiente a 
+la fecha guardada en la strutura rtctime
+set_time carga el tiempo a la placa
+time_t es un int, tiempo en segundos
+*/
+
+
+
 //=====[Libraries]=============================================================
 
 #include "mbed.h"
 #include "arm_book_lib.h"
+#include <vector>
 
 //=====[Defines]===============================================================
 
@@ -46,6 +115,8 @@ UnbufferedSerial uartUsb(USBTX, USBRX, 115200);
 
 AnalogIn lm35(A1);
 
+
+// pines que van al teclado matricial
 DigitalOut keypadRowPins[KEYPAD_NUMBER_OF_ROWS] = {PB_3, PB_5, PC_7, PA_15};
 DigitalIn keypadColPins[KEYPAD_NUMBER_OF_COLS]  = {PB_12, PB_13, PB_15, PC_6};
 
@@ -77,15 +148,29 @@ float lm35ReadingsSum      = 0.0;
 float lm35ReadingsArray[NUMBER_OF_AVG_SAMPLES];
 float lm35TempC            = 0.0;
 
+
+// estados y onstantes del teclado matricial
 int accumulatedDebounceMatrixKeypadTime = 0;
 int matrixKeypadCodeIndex = 0;
 char matrixKeypadLastKeyPressed = '\0';
+
+// usando array de c
+/*char matrixKeypadIndexToCharArray[] = {
+    '1', '2', '3', 'A',
+    '4', '5', '6', 'B',
+    '7', '8', '9', 'C',
+    '*', '0', '#', 'D',
+};*/
+
+// usando vector de c++
 char matrixKeypadIndexToCharArray[] = {
     '1', '2', '3', 'A',
     '4', '5', '6', 'B',
     '7', '8', '9', 'C',
     '*', '0', '#', 'D',
 };
+vector<char>  matrixKeypadIndexToCharVector; // lo incio en matrixKeypadInit
+
 matrixKeypadState_t matrixKeypadState;
 
 int eventsIndex            = 0;
@@ -112,9 +197,9 @@ float celsiusToFahrenheit( float tempInCelsiusDegrees );
 float analogReadingScaledWithTheLM35Formula( float analogReading );
 void lm35ReadingsArrayInit();
 
-void matrixKeypadInit();
-char matrixKeypadScan();
-char matrixKeypadUpdate();
+void matrixKeypadInit(); // se llama en inputsInit()
+char matrixKeypadScan(); // se llama en  matrixKeypadUpdate
+char matrixKeypadUpdate(); // se llama en alarmDeactivationUpdate(), es decir con cada iteracion del while del main
 
 //=====[Main function, the program entry point after power on or reset]========
 
@@ -530,6 +615,12 @@ void lm35ReadingsArrayInit()
 
 void matrixKeypadInit()
 {
+    printf ( "Iniciando teclado matricial\r\n" );
+    // uso vector de c++
+    for ( int i = 0; i < KEYPAD_NUMBER_OF_ROWS*KEYPAD_NUMBER_OF_ROWS ; i++ ){
+        matrixKeypadIndexToCharVector.push_back(matrixKeypadIndexToCharArray[i]);
+    }
+
     matrixKeypadState = MATRIX_KEYPAD_SCANNING;
     int pinIndex = 0;
     for( pinIndex=0; pinIndex<KEYPAD_NUMBER_OF_COLS; pinIndex++ ) {
@@ -547,16 +638,24 @@ char matrixKeypadScan()
 
         for( i=0; i<KEYPAD_NUMBER_OF_ROWS; i++ ) {
             keypadRowPins[i] = ON;
-        }
+        } //prende todos los de la fila
 
-        keypadRowPins[row] = OFF;
+        keypadRowPins[row] = OFF; // apaga el de la fila actual
 
         for( col=0; col<KEYPAD_NUMBER_OF_COLS; col++ ) {
-            if( keypadColPins[col] == OFF ) {
-                return matrixKeypadIndexToCharArray[row*KEYPAD_NUMBER_OF_ROWS + col];
+            if( keypadColPins[col] == OFF ) { // si una de las columnas es 0 entonces se esta aretando
+                
+                printf ( "Estado actual %d, ", matrixKeypadState );
+                printf ( "tiempo debounce actual %d mseg, ", accumulatedDebounceMatrixKeypadTime );
+                //printf ( "fila %d, col %d, tecla %c \r\n ", row, col, matrixKeypadIndexToCharArray[ row*KEYPAD_NUMBER_OF_ROWS + col] );
+                //return matrixKeypadIndexToCharArray[ row*KEYPAD_NUMBER_OF_ROWS + col];
+                printf ( "fila %d, col %d, tecla %c \r\n ", row, col, matrixKeypadIndexToCharVector.at( row*KEYPAD_NUMBER_OF_ROWS + col) );
+                return matrixKeypadIndexToCharVector.at( row*KEYPAD_NUMBER_OF_ROWS + col);
+                // devuelve el simbolo correpsondiente a row en off y col en off
             }
         }
     }
+    // es un for rapido
     return '\0';
 }
 
@@ -566,23 +665,26 @@ char matrixKeypadUpdate()
     char keyReleased = '\0';
 
     switch( matrixKeypadState ) {
-
-    case MATRIX_KEYPAD_SCANNING:
+    case MATRIX_KEYPAD_SCANNING: // asi inicia, si se resiona algo cambia al estado debounce
         keyDetected = matrixKeypadScan();
         if( keyDetected != '\0' ) {
             matrixKeypadLastKeyPressed = keyDetected;
+            printf ( "Iniciando debounce time, por la tecla %c \r\n", keyDetected );
             accumulatedDebounceMatrixKeypadTime = 0;
             matrixKeypadState = MATRIX_KEYPAD_DEBOUNCE;
         }
         break;
 
     case MATRIX_KEYPAD_DEBOUNCE:
+    
         if( accumulatedDebounceMatrixKeypadTime >=
             DEBOUNCE_KEY_TIME_MS ) {
             keyDetected = matrixKeypadScan();
             if( keyDetected == matrixKeypadLastKeyPressed ) {
                 matrixKeypadState = MATRIX_KEYPAD_KEY_HOLD_PRESSED;
+                printf ( "la tecla %c fue verdaderamente presionada\r\n", keyDetected );
             } else {
+                printf ( "la tecla %c NO fue verdaderamente presionada\r\n", matrixKeypadLastKeyPressed );
                 matrixKeypadState = MATRIX_KEYPAD_SCANNING;
             }
         }
@@ -596,6 +698,7 @@ char matrixKeypadUpdate()
             if( keyDetected == '\0' ) {
                 keyReleased = matrixKeypadLastKeyPressed;
             }
+            printf ( "Se dejo de apretar la tecla %c, y puede ser otra como no.\r\n", matrixKeypadLastKeyPressed );
             matrixKeypadState = MATRIX_KEYPAD_SCANNING;
         }
         break;
